@@ -1,6 +1,6 @@
 // L3-eval.ts
 import { map } from "ramda";
-import { isCExp, isLetExp } from "./L3-ast";
+import { ClassExp, isCExp, isLetExp, isClassExp, Binding } from "./L3-ast";
 import { BoolExp, CExp, Exp, IfExp, LitExp, NumExp,
          PrimOp, ProcExp, Program, StrExp, VarDecl } from "./L3-ast";
 import { isAppExp, isBoolExp, isDefineExp, isIfExp, isLitExp, isNumExp,
@@ -8,7 +8,7 @@ import { isAppExp, isBoolExp, isDefineExp, isIfExp, isLitExp, isNumExp,
 import { makeBoolExp, makeLitExp, makeNumExp, makeProcExp, makeStrExp } from "./L3-ast";
 import { parseL3Exp } from "./L3-ast";
 import { applyEnv, makeEmptyEnv, makeEnv, Env } from "./L3-env-sub";
-import { isClosure, makeClosure, Closure, Value } from "./L3-value";
+import { isClosure, makeClosure, makeClass, makeObject, isClass, isObject, isSymbolSExp, Class, Closure, Value } from "./L3-value";
 import { first, rest, isEmpty, List, isNonEmptyList } from '../shared/list';
 import { isBoolean, isNumber, isString } from "../shared/type-predicates";
 import { Result, makeOk, makeFailure, bind, mapResult, mapv } from "../shared/result";
@@ -30,6 +30,7 @@ const L3applicativeEval = (exp: CExp, env: Env): Result<Value> =>
     isLitExp(exp) ? makeOk(exp.val) :
     isIfExp(exp) ? evalIf(exp, env) :
     isProcExp(exp) ? evalProc(exp, env) :
+    isClassExp(exp) ? evalClass(exp, env) :
     isAppExp(exp) ? bind(L3applicativeEval(exp.rator, env), (rator: Value) =>
                         bind(mapResult(param => 
                             L3applicativeEval(param, env), 
@@ -50,9 +51,34 @@ const evalIf = (exp: IfExp, env: Env): Result<Value> =>
 const evalProc = (exp: ProcExp, env: Env): Result<Closure> =>
     makeOk(makeClosure(exp.args, exp.body));
 
+const evalClass = (exp: ClassExp, env: Env): Result<Class> =>
+    makeOk(makeClass(exp.fields, exp.methods));
+
 const L3applyProcedure = (proc: Value, args: Value[], env: Env): Result<Value> =>
     isPrimOp(proc) ? applyPrimitive(proc, args) :
     isClosure(proc) ? applyClosure(proc, args, env) :
+    isClass(proc) ? (
+        // constructor- args are field values
+        (proc.params.length === args.length) ? makeOk(makeObject(proc, args, proc.methods.map(m => m.val))) :
+        makeFailure(`Wrong number of args to constructor`) ) :
+    isObject(proc) ? (
+        (args.length >= 1 && isSymbolSExp(args[0])) ? (
+            (() => {
+                const name = (args[0] as any).val as string;
+                const meth = proc.class.methods.find((b: Binding) => b.var.var === name);
+                if (!meth) return makeFailure(`Unrecognized method: ${name}`);
+                // meth.val should be a ProcExp
+                const mval = meth.val as ProcExp;
+                if (!mval || mval.tag !== 'ProcExp') return makeFailure(`Bad method body for: ${name}`);
+                // substitute field vars with their literal values
+                const fieldNames = map((v: VarDecl) => v.var, proc.class.params);
+                const fieldLitExps: CExp[] = map(valueToLitExp, proc.fields);
+                const bodyWithFields = substitute(mval.body, fieldNames, fieldLitExps);
+                const clo = makeClosure(mval.args, bodyWithFields as CExp[]);
+                return applyClosure(clo, args.slice(1), env);
+            })()
+        ) : makeFailure('Bad message')
+    ) :
     makeFailure(`Bad procedure ${format(proc)}`);
 
 // Applications are computed by substituting computed

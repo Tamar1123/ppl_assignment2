@@ -5,11 +5,9 @@ import { map } from "ramda";
 import { isBoolExp, isCExp, isLitExp, isNumExp, isPrimOp, isStrExp, isVarRef,
          isAppExp, isDefineExp, isIfExp, isLetExp, isProcExp,
          Binding, VarDecl, CExp, Exp, IfExp, LetExp, ProcExp, Program,
-         parseL3Exp,  DefineExp,
-         isClassExp,
-         ClassExp} from "./L3-ast";
+         parseL3Exp,  DefineExp, isClassExp, ClassExp } from "./L3-ast";
 import { applyEnv, makeEmptyEnv, makeExtEnv, Env } from "./L3-env-env";
-import { isClosure, makeClosureEnv, Closure, Value } from "./L3-value";
+import { isClosure, makeClosureEnv, Closure, Value, isClass, isObject, makeClassEnv, makeObjectEnv, isSymbolSExp } from "./L3-value";
 import { applyPrimitive } from "./evalPrimitive";
 import { allT, first, rest, isEmpty, isNonEmptyList } from "../shared/list";
 import { Result, makeOk, makeFailure, bind, mapResult } from "../shared/result";
@@ -49,15 +47,40 @@ const evalIf = (exp: IfExp, env: Env): Result<Value> =>
 const evalProc = (exp: ProcExp, env: Env): Result<Closure> =>
     makeOk(makeClosureEnv(exp.args, exp.body, env));
 
-const evalClass = (exp: ClassExp, env: Env): Result<Closure> => 
-    makeOk(makeClosureEnv(exp.fields, map((m: Binding) => m.val, exp.methods), env));
+const evalClass = (exp: ClassExp, env: Env): Result<Value> => 
+    makeOk(makeClassEnv(exp.fields, exp.methods, env));
 
 
 // KEY: This procedure does NOT have an env parameter.
-//      Instead we use the env of the closure.
+//      Instead we use the env of the closure or object.
 const applyProcedure = (proc: Value, args: Value[]): Result<Value> =>
     isPrimOp(proc) ? applyPrimitive(proc, args) :
     isClosure(proc) ? applyClosure(proc, args) :
+    isClass(proc) ? (
+        // constructor
+        (proc.params.length === args.length) ? (
+            (() => {
+                const fieldNames = map((v: VarDecl) => v.var, proc.params);
+                const objectEnv = makeExtEnv(fieldNames, args, proc.env);
+                // creating closures for each method
+                const methodClosures = proc.methods.map((b: Binding) => {
+                    const pv = b.val as ProcExp;
+                    return makeClosureEnv(pv.args, pv.body, objectEnv);
+                });
+                return makeOk(makeObjectEnv(proc, args, methodClosures, objectEnv));
+            })()
+        ) : makeFailure(`Wrong number of args to constructor`) ) :
+    isObject(proc) ? (
+        (args.length >= 1 && isSymbolSExp(args[0])) ? (
+            (() => {
+                const name = (args[0] as any).val as string;
+                const idx = proc.class.methods.findIndex((b: Binding) => b.var.var === name);
+                if (idx === -1) return makeFailure(`Unrecognized method: ${name}`);
+                const mclosure = proc.methods[idx] as Closure;
+                return applyClosure(mclosure, args.slice(1));
+            })()
+        ) : makeFailure('Bad message')
+    ) :
     makeFailure(`Bad procedure ${format(proc)}`);
 
 const applyClosure = (proc: Closure, args: Value[]): Result<Value> => {
@@ -102,4 +125,3 @@ const evalLet = (exp: LetExp, env: Env): Result<Value> => {
     return bind(vals, (vals: Value[]) => 
         evalSequence(exp.body, makeExtEnv(vars, vals, env)));
 }
-
