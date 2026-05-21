@@ -92,7 +92,7 @@ export const makeLetExp = (bindings: Binding[], body: CExp[]): LetExp =>
 // L3
 export const makeLitExp = (val: SExpValue): LitExp =>
     ({tag: "LitExp", val: val});
-export const makeClass = (fields: VarDecl[], methods: Binding[]): ClassExp =>
+export const makeClassExp = (fields: VarDecl[], methods: Binding[]): ClassExp =>
     ({tag: "ClassExp", fields: fields, methods: methods});
 
 // Type predicates for disjoint types
@@ -271,7 +271,7 @@ export const parseClassExp = (params: Sexp, bindings: Sexp[]): Result<ClassExp> 
     const methodNames = map(b => b[0], methodsSexp);
     const valsResult = mapResult(parseL3CExp, map(second, methodsSexp));
     const bindingsResult = mapv(valsResult, (vals: CExp[]) => zipWith(makeBinding, methodNames, vals));
-    return bind(bindingsResult, (bindings: Binding[]) => makeOk(makeClass(fields, bindings)));
+    return bind(bindingsResult, (bindings: Binding[]) => makeOk(makeClassExp(fields, bindings)));
 }
 
 
